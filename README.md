@@ -1,6 +1,6 @@
 # ESPM MCP — Energy Star Portfolio Manager for Claude
 
-An open-source MCP (Model Context Protocol) server that connects Claude directly to your Energy Star Portfolio Manager account. Ask questions about your portfolio in plain language instead of exporting spreadsheets.
+An open-source MCP (Model Context Protocol) server that connects Claude directly to your Energy Star Portfolio Manager account. Explore what's possible when AI meets sustainability data in plain language instead of exporting spreadsheets.
 
 > Built by Nikolas Mirando as an independent prototype exploring AI + sustainability data infrastructure in CRE.
 
@@ -21,6 +21,7 @@ Once connected, you can ask things like:
 ## How it works
 
 Your credentials stay **on your machine**. The MCP server runs locally, calls the ESPM API using your credentials, and returns your data to Claude. Nothing touches any third-party server.
+For demonstration and educational purposes â€” not an official system or compliance tool. Users authenticate with their own ENERGY STAR credentials locally; no data is stored or transmitted by this project.
 
 ```
 Claude (your question)
@@ -93,6 +94,7 @@ Add this entry (update the path to where you cloned the repo):
 {
   "mcpServers": {
     "espm": {
+      "type": "stdio",
       "command": "node",
       "args": ["/absolute/path/to/ESPM_MCP/src/index.js"]
     }
