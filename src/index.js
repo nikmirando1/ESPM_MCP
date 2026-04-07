@@ -3,7 +3,7 @@
 /**
  * ESPM MCP Server
  * Connects Claude to Energy Star Portfolio Manager
- * https://github.com/YOUR_USERNAME/espm-mcp
+ * https://github.com/nikmirando1/ESPM_MCP
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -345,7 +345,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "list_property_groups",
       description:
-        "List all property groups in your account (e.g. APG, IMPACT Fund, asset type groups). Returns group IDs you can use with other tools.",
+        "List all property groups in your account (e.g. by fund, asset type, or management style). Returns group IDs you can use with other tools.",
       inputSchema: { type: "object", properties: {} },
     },
     {
@@ -365,7 +365,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "get_group_score_summary",
       description:
-        "Get a full score summary for a property group — average ENERGY STAR score, min/max, and per-property breakdown. Perfect for questions like 'what is the average score for my IMPACT Fund properties?'",
+        "Get a full score summary for a property group — average ENERGY STAR score, min/max, and per-property breakdown. Perfect for questions like 'what is the average score for my office properties?'",
       inputSchema: {
         type: "object",
         properties: {
