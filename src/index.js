@@ -27,7 +27,7 @@ if (existsSync(envPath)) {
     if (!trimmed || trimmed.startsWith("#")) continue;
     const [key, ...valueParts] = trimmed.split("=");
     if (key && valueParts.length > 0) {
-      process.env[key.trim()] = valueParts.join("=").trim();
+      process.env[key.trim()] = valueParts.join("=").replace(/\s+#.*$/, "").trim();
     }
   }
 }
