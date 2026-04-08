@@ -50,7 +50,7 @@ function authHeader() {
   return `Basic ${encoded}`;
 }
 
-async function espmGet(path) {
+async function espmGet(path, options = {}) {
   if (!USERNAME || !PASSWORD) {
     throw new Error(
       "ESPM credentials not configured. Copy .env.example to .env and add your username and password."
@@ -63,6 +63,7 @@ async function espmGet(path) {
       Authorization: authHeader(),
       Accept: "application/xml",
       "Content-Type": "application/xml",
+      ...(options.headers || {}),
     },
   });
 
@@ -82,16 +83,88 @@ async function espmGet(path) {
 
 // ─── Data Helpers ────────────────────────────────────────────────────────────
 
+function arrayify(value) {
+  if (!value) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
 function safeNum(val) {
   const n = parseFloat(val);
   return isNaN(n) ? null : n;
 }
 
+function extractText(value) {
+  if (value == null) return null;
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  if (typeof value === "object") {
+    if (value.nil === "true") return null;
+    if (typeof value._ === "string" || typeof value._ === "number") {
+      return String(value._);
+    }
+  }
+  return null;
+}
+
+function extractLinkHref(link) {
+  if (!link) return "";
+  if (typeof link === "string") return link;
+  return link.link || link.href || link._ || "";
+}
+
+function extractLinkId(link) {
+  if (!link) return null;
+  if (link.id) return String(link.id);
+  const href = extractLinkHref(link);
+  return href ? href.split("/").pop() : null;
+}
+
 function extractProperties(data) {
   // Handle both single property and array
-  const links = data?.response?.links?.link;
-  if (!links) return [];
-  return Array.isArray(links) ? links : [links];
+  return arrayify(data?.response?.links?.link);
+}
+
+function collectMetrics(node, metrics = []) {
+  if (!node || typeof node !== "object") return metrics;
+  if (Array.isArray(node)) {
+    for (const item of node) collectMetrics(item, metrics);
+    return metrics;
+  }
+
+  if (
+    typeof node.name === "string" &&
+    typeof node.description === "string" &&
+    typeof node.dataType === "string"
+  ) {
+    metrics.push(node);
+  }
+
+  for (const value of Object.values(node)) {
+    collectMetrics(value, metrics);
+  }
+
+  return metrics;
+}
+
+async function getAccountId() {
+  const data = await espmGet("/account");
+  const accountId = data?.account?.id;
+  if (!accountId) {
+    throw new Error("Could not determine your ESPM account ID.");
+  }
+  return String(accountId);
+}
+
+async function getMetricCatalog() {
+  const data = await espmGet("/reports/metrics");
+  return collectMetrics(data);
+}
+
+function findMetricName(metrics, matcher, fallback = null) {
+  const match = metrics.find(
+    (metric) =>
+      matcher(metric.description?.toLowerCase?.() || "", metric.name?.toLowerCase?.() || "")
+  );
+  return match?.name || fallback;
 }
 
 function formatProperty(prop) {
@@ -124,20 +197,18 @@ async function getAccount() {
 }
 
 async function listProperties() {
-  const data = await espmGet("/account/properties");
-  const links = data?.response?.links?.link;
-  if (!links) return [];
-
-  const propertyLinks = Array.isArray(links) ? links : [links];
+  const accountId = await getAccountId();
+  const data = await espmGet(`/account/${accountId}/property/list`);
+  const propertyLinks = extractProperties(data);
 
   // Extract IDs from the href links
   const properties = propertyLinks.map((link) => {
-    const href = link?._ || link?.href || (typeof link === "string" ? link : "");
-    const id = href.split("/").pop();
-    return { id, href };
+    const href = extractLinkHref(link);
+    const id = extractLinkId(link);
+    return { id, name: link?.hint || null, href };
   });
 
-  return properties;
+  return properties.filter((property) => property.id);
 }
 
 async function getProperty(propertyId) {
@@ -145,11 +216,20 @@ async function getProperty(propertyId) {
   return formatProperty(data?.property);
 }
 
-async function getPropertyMetrics(propertyId, year, month) {
+async function getPropertyMetrics(propertyId, year, month, metricNames = null) {
   const y = year || new Date().getFullYear() - 1;
   const m = month || 12;
+  const requestedMetrics =
+    metricNames && metricNames.length > 0
+      ? metricNames
+      : ["score", "siteIntensity", "sourceIntensity", "totalLocationBasedGHGEmissions"];
   const data = await espmGet(
-    `/property/${propertyId}/metrics?year=${y}&month=${m}&measurementSystem=EPA`
+    `/property/${propertyId}/metrics?year=${y}&month=${m}&measurementSystem=EPA`,
+    {
+      headers: {
+        "PM-Metrics": requestedMetrics.join(","),
+      },
+    }
   );
 
   const metrics = data?.propertyMetrics?.metric;
@@ -159,11 +239,14 @@ async function getPropertyMetrics(propertyId, year, month) {
   const result = {};
   for (const metric of metricList) {
     const name = metric?.name || metric?.["$"]?.name;
-    const value = metric?.value || metric?.value?._ || null;
-    if (name) result[name] = safeNum(value) ?? value;
+    const value = extractText(metric?.value);
+    const dataType = metric?.dataType || metric?.["$"]?.dataType;
+    if (name) {
+      result[name] = dataType === "numeric" ? safeNum(value) : value;
+    }
   }
 
-  return { propertyId, year: y, month: m, metrics: result };
+  return { propertyId, year: y, month: m, requestedMetrics, metrics: result };
 }
 
 async function listPropertyGroups() {
@@ -172,9 +255,9 @@ async function listPropertyGroups() {
   if (!groups) return [];
   const groupList = Array.isArray(groups) ? groups : [groups];
   return groupList.map((g) => {
-    const href = g?._ || g?.href || (typeof g === "string" ? g : "");
-    const id = href.split("/").pop();
-    return { id, href };
+    const href = extractLinkHref(g);
+    const id = extractLinkId(g);
+    return { id, name: g?.hint || null, href };
   });
 }
 
@@ -190,13 +273,75 @@ async function getPropertyGroup(groupId) {
 
 async function getGroupProperties(groupId) {
   const data = await espmGet(`/propertyGroup/${groupId}/properties`);
-  const links = data?.response?.links?.link;
-  if (!links) return [];
-  const list = Array.isArray(links) ? links : [links];
-  return list.map((l) => {
-    const href = l?._ || l?.href || (typeof l === "string" ? l : "");
-    return href.split("/").pop();
-  });
+  const list = arrayify(data?.response?.links?.link);
+  return list.map((link) => extractLinkId(link)).filter(Boolean);
+}
+
+async function getEnergyStarCertificationSummary(year) {
+  const requestedYear = Number(year);
+  if (!Number.isInteger(requestedYear)) {
+    throw new Error("Please provide a valid year, such as 2025.");
+  }
+
+  const [properties, metricCatalog] = await Promise.all([
+    listProperties(),
+    getMetricCatalog(),
+  ]);
+
+  const yearsCertifiedMetric = findMetricName(
+    metricCatalog,
+    (description, name) =>
+      description.includes("energy star certification") &&
+      description.includes("year(s) certified") &&
+      !description.includes("number of years") &&
+      !name.includes("nextgen"),
+    "energyStarCertificationYearsCertifiedScore"
+  );
+
+  if (!yearsCertifiedMetric) {
+    throw new Error("Could not find the ENERGY STAR certification metrics in ESPM.");
+  }
+
+  const certifiedProperties = [];
+  const failedProperties = [];
+
+  for (const property of properties) {
+    try {
+      const [details, metricsData] = await Promise.all([
+        getProperty(property.id),
+        getPropertyMetrics(property.id, requestedYear, 12, [
+          yearsCertifiedMetric,
+          "energyStarCertificationEligibility",
+        ]),
+      ]);
+
+      const yearsCertified = String(metricsData.metrics?.[yearsCertifiedMetric] || "");
+      if (yearsCertified.includes(String(requestedYear))) {
+        certifiedProperties.push({
+          id: property.id,
+          name: details.name,
+          yearsCertified,
+          eligible: metricsData.metrics?.energyStarCertificationEligibility || null,
+        });
+      }
+    } catch (error) {
+      failedProperties.push({
+        id: property.id,
+        name: property.name || null,
+        error: error.message,
+      });
+    }
+  }
+
+  return {
+    year: requestedYear,
+    totalPropertiesChecked: properties.length,
+    certifiedPropertyCount: certifiedProperties.length,
+    failedPropertyCount: failedProperties.length,
+    properties: certifiedProperties,
+    metricUsed: yearsCertifiedMetric,
+    failedProperties: failedProperties.slice(0, 25),
+  };
 }
 
 async function getPortfolioSummary() {
@@ -223,7 +368,7 @@ async function getPortfolioSummary() {
         score: metricsData.metrics?.score ?? null,
         siteEUI: metricsData.metrics?.siteIntensity ?? null,
         sourceEUI: metricsData.metrics?.sourceIntensity ?? null,
-        ghgEmissions: metricsData.metrics?.totalGHGEmissions ?? null,
+        ghgEmissions: metricsData.metrics?.totalLocationBasedGHGEmissions ?? null,
       });
     } catch {
       summaries.push({ id: p.id, error: "Could not retrieve data" });
@@ -383,6 +528,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         "Get a high-level summary of your entire portfolio — scores, EUI, and property details across all properties (samples up to 50). Good for 'what does my portfolio look like overall?' questions.",
       inputSchema: { type: "object", properties: {} },
     },
+    {
+      name: "get_energy_star_certification_summary",
+      description:
+        "Count which properties were actually ENERGY STAR certified in a specific year, using ESPM certification metrics rather than score alone.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          year: {
+            type: "number",
+            description: "Calendar year to check for ENERGY STAR certification, such as 2025.",
+          },
+        },
+        required: ["year"],
+      },
+    },
   ],
 }));
 
@@ -416,6 +576,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         break;
       case "get_portfolio_summary":
         result = await getPortfolioSummary();
+        break;
+      case "get_energy_star_certification_summary":
+        result = await getEnergyStarCertificationSummary(args.year);
         break;
       default:
         throw new Error(`Unknown tool: ${name}`);
