@@ -143,6 +143,7 @@ Restart Claude Desktop. You'll see the ESPM tools available. Start asking questi
 
 | Tool | What it does |
 |------|-------------|
+| `list_accounts` | List the ESPM accounts configured in `accounts.csv` (does not hit the API) |
 | `get_account` | Confirm you're connected and see your account info |
 | `list_properties` | List all property IDs in your account |
 | `get_property` | Get details for a specific property |

@@ -285,6 +285,21 @@ function formatProperty(prop) {
 
 // ─── Tool Implementations ────────────────────────────────────────────────────
 
+function listAccounts() {
+  const configured = Array.from(accounts.values()).map(({ username, env }) => ({
+    name: username,
+    env,
+  }));
+  const envDefaultAvailable = Boolean(
+    process.env.ESPM_USERNAME && process.env.ESPM_PASSWORD
+  );
+  return {
+    source: existsSync(csvPath) ? csvPath : null,
+    accounts: configured,
+    envDefaultAvailable,
+  };
+}
+
 async function getAccount(accountName) {
   const data = await espmGet("/account", {}, accountName);
   const account = data?.account;
@@ -553,6 +568,12 @@ const ACCOUNT_NAME_PROP = {
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
+      name: "list_accounts",
+      description:
+        "List the ESPM accounts configured in accounts.csv (usernames + env). Use the returned names as the account_name parameter on other tools. Does not hit the ESPM API.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
       name: "get_account",
       description:
         "Get your ESPM account info — name, organization, and which environment you're connected to (test vs live).",
@@ -673,6 +694,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     let result;
 
     switch (name) {
+      case "list_accounts":
+        result = listAccounts();
+        break;
       case "get_account":
         result = await getAccount(args.account_name);
         break;
