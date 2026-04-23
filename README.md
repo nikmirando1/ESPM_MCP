@@ -113,7 +113,7 @@ Add this entry (update the path to where you cloned the repo):
     "espm": {
       "type": "stdio",
       "command": "node",
-      "args": ["/absolute/path/to/ESPM_MCP/src/stdio.js"]
+      "args": ["/absolute/path/to/ESPM_MCP/src/transports/stdio.js"]
     }
   }
 }
@@ -138,7 +138,7 @@ npm run start:http
 # ESPM MCP HTTP server listening on http://127.0.0.1:3000/mcp
 ```
 
-Or directly: `node src/http.js`
+Or directly: `node src/transports/http.js`
 
 Env vars (both optional, see `env.example`):
 

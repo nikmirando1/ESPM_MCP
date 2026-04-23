@@ -1,8 +1,9 @@
 /**
  * ESPM MCP Server — shared setup.
  *
- * Both entry points (stdio in stdio.js, HTTP in http.js) import `createEspmServer`
- * from here. All tool definitions, handlers, and ESPM client code live in this module.
+ * Both entry points (transports/stdio.js and transports/http.js) import
+ * `createEspmServer` from here. All tool definitions, handlers, and ESPM
+ * client code live in this module.
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";

@@ -13,7 +13,7 @@
 
 import { createServer } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { createEspmServer } from "./server.js";
+import { createEspmServer } from "../server.js";
 
 const port = Number(process.env.MCP_HTTP_PORT ?? 3000);
 const host = process.env.MCP_HTTP_HOST ?? "127.0.0.1";

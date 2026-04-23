@@ -2,15 +2,15 @@
   "name": "espm-mcp",
   "version": "1.1.0",
   "description": "MCP server for Energy Star Portfolio Manager - query your portfolio with Claude",
-  "main": "src/stdio.js",
+  "main": "src/transports/stdio.js",
   "type": "module",
   "bin": {
-    "espm-mcp": "./src/stdio.js",
-    "espm-mcp-http": "./src/http.js"
+    "espm-mcp": "./src/transports/stdio.js",
+    "espm-mcp-http": "./src/transports/http.js"
   },
   "scripts": {
-    "start:stdio": "node src/stdio.js",
-    "start:http": "node src/http.js"
+    "start:stdio": "node src/transports/stdio.js",
+    "start:http": "node src/transports/http.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
