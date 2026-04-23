@@ -11,6 +11,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { parseStringPromise } from "xml2js";
 import { readFileSync, existsSync } from "fs";
@@ -549,11 +551,88 @@ async function getGroupScoreSummary(groupId, accountName) {
   };
 }
 
+// ─── Suspicious-Data Workflow Helpers ─────────────────────────────────────────
+
+async function listPropertyMeters(propertyId, accountName) {
+  const data = await espmGet(`/property/${propertyId}/meter/list`, {}, accountName);
+  const meterLinks = arrayify(data?.response?.links?.link);
+
+  const meters = [];
+  for (const link of meterLinks) {
+    const meterId = extractLinkId(link);
+    if (!meterId) continue;
+    try {
+      const meterData = await espmGet(`/meter/${meterId}`, {}, accountName);
+      const meter = meterData?.meter;
+      meters.push({
+        id: meterId,
+        name: meter?.name || link?.hint || "Unknown",
+        type: meter?.type || null,
+        unitOfMeasure: meter?.unitOfMeasure || null,
+        metered: meter?.metered || null,
+        firstBillDate: meter?.firstBillDate || null,
+        inUse: meter?.inUse || null,
+        aggregateMeter: meter?.aggregateMeter || null,
+        accessLevel: meter?.accessLevel || null,
+      });
+    } catch (err) {
+      meters.push({
+        id: meterId,
+        name: link?.hint || "Unknown",
+        error: err.message,
+      });
+    }
+  }
+
+  return { propertyId, meterCount: meters.length, meters };
+}
+
+async function getMeterConsumptionData(meterId, startDate, endDate, accountName) {
+  let path = `/meter/${meterId}/consumptionData`;
+  const params = ["page=1"];
+  if (startDate) params.push(`startDate=${startDate}`);
+  if (endDate) params.push(`endDate=${endDate}`);
+  path += "?" + params.join("&");
+
+  const data = await espmGet(path, {}, accountName);
+  const entries = arrayify(data?.meterData?.meterConsumption);
+
+  return {
+    meterId,
+    entryCount: entries.length,
+    entries: entries.map((entry) => ({
+      id: entry?.id,
+      startDate: entry?.startDate,
+      endDate: entry?.endDate,
+      usage: entry?.usage,
+      cost: extractText(entry?.cost),
+      estimatedValue: entry?.estimatedValue,
+      audit: {
+        createdBy: entry?.audit?.createdBy || null,
+        createdByAccountId: entry?.audit?.createdByAccountId || null,
+        lastUpdatedBy: entry?.audit?.lastUpdatedBy || null,
+        lastUpdatedByAccountId: entry?.audit?.lastUpdatedByAccountId || null,
+        lastUpdatedDate: entry?.audit?.lastUpdatedDate || null,
+      },
+    })),
+  };
+}
+
+async function listConnectedCustomers(accountName) {
+  const data = await espmGet("/customer/list", {}, accountName);
+  const customerLinks = arrayify(data?.response?.links?.link);
+
+  return customerLinks.map((link) => ({
+    id: extractLinkId(link),
+    name: link?.hint || null,
+  }));
+}
+
 // ─── MCP Server ──────────────────────────────────────────────────────────────
 
 const server = new Server(
   { name: "espm-mcp", version: "1.0.0" },
-  { capabilities: { tools: {} } }
+  { capabilities: { tools: {}, prompts: {} } }
 );
 
 const ACCOUNT_NAME_PROP = {
@@ -668,6 +747,55 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: { type: "object", properties: { ...ACCOUNT_NAME_PROP } },
     },
     {
+      name: "list_property_meters",
+      description:
+        "List all meters for a property, including name, type, unit of measure, and whether the meter is an aggregate meter.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          property_id: {
+            type: "string",
+            description: "The ESPM property ID",
+          },
+          ...ACCOUNT_NAME_PROP,
+        },
+        required: ["property_id"],
+      },
+    },
+    {
+      name: "get_meter_consumption_data",
+      description:
+        "Get consumption data entries for a meter, including usage amounts and audit info showing who created/last updated each entry (e.g. a utility web services account vs manual entry).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          meter_id: {
+            type: "string",
+            description: "The ESPM meter ID",
+          },
+          start_date: {
+            type: "string",
+            description: "Start date in YYYY-MM-DD format (optional)",
+          },
+          end_date: {
+            type: "string",
+            description: "End date in YYYY-MM-DD format (optional)",
+          },
+          ...ACCOUNT_NAME_PROP,
+        },
+        required: ["meter_id"],
+      },
+    },
+    {
+      name: "list_connected_customers",
+      description:
+        "List all customer accounts connected to your ESPM account. Useful for checking if a specific organization (e.g. BC Hydro) has a data exchange connection.",
+      inputSchema: {
+        type: "object",
+        properties: { ...ACCOUNT_NAME_PROP },
+      },
+    },
+    {
       name: "get_energy_star_certification_summary",
       description:
         "Count which properties were actually ENERGY STAR certified in a specific year, using ESPM certification metrics rather than score alone.",
@@ -726,6 +854,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "get_portfolio_summary":
         result = await getPortfolioSummary(args.account_name);
         break;
+      case "list_property_meters":
+        result = await listPropertyMeters(args.property_id, args.account_name);
+        break;
+      case "get_meter_consumption_data":
+        result = await getMeterConsumptionData(
+          args.meter_id,
+          args.start_date,
+          args.end_date,
+          args.account_name
+        );
+        break;
+      case "list_connected_customers":
+        result = await listConnectedCustomers(args.account_name);
+        break;
       case "get_energy_star_certification_summary":
         result = await getEnergyStarCertificationSummary(args.year, args.account_name);
         break;
@@ -742,6 +884,143 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       isError: true,
     };
   }
+});
+
+// ─── Prompts ─────────────────────────────────────────────────────────────────
+
+server.setRequestHandler(ListPromptsRequestSchema, async () => ({
+  prompts: [
+    {
+      name: "suspicious-data",
+      description:
+        "Investigate whether a property's energy data looks legitimate or suspicious. Runs a series of checks on meters, data sources, and aggregation.",
+      arguments: [
+        {
+          name: "property_id",
+          description: "The ESPM property ID to investigate",
+          required: true,
+        },
+      ],
+    },
+  ],
+}));
+
+server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+  const { name, arguments: args } = request.params;
+
+  if (name !== "suspicious-data") {
+    throw new Error(`Unknown prompt: ${name}`);
+  }
+
+  const propertyId = args?.property_id;
+  if (!propertyId) {
+    throw new Error("property_id is required");
+  }
+
+  return {
+    messages: [
+      {
+        role: "user",
+        content: {
+          type: "text",
+          text: `Run the "Suspicious Data" investigation workflow for ESPM property ${propertyId}.
+
+Walk through the following checks IN ORDER. For each check, clearly print:
+- The name of the check you are running
+- The result of the check
+- What you are deciding to do next based on the result
+
+---
+
+STEP 1: Get property details
+Call get_property with property_id "${propertyId}" to determine the property type.
+Print the property name, address, and primary function.
+
+STEP 2: Check meter access
+Call list_property_meters with property_id "${propertyId}".
+
+If the call FAILS with an error (typically 403 or "not authorized"), you do NOT have meter access. Go to BRANCH A.
+If the call SUCCEEDS and returns meters, you DO have meter access. Go to BRANCH B.
+
+--- BRANCH A: No meter access ---
+
+STEP A1: Check if property is shared with BC Hydro
+Call list_connected_customers to see all connected accounts.
+Look through the list for any customer whose name contains "BC Hydro" or "BCHydro" (case-insensitive).
+
+If NOT shared with BC Hydro:
+→ Print: "The property has not been shared with BC Hydro. We cannot see the meters. The building owner should be contacted."
+→ STOP.
+
+If shared with BC Hydro:
+→ Check if the property type suggests an aggregated meter is needed (see AGGREGATION RULES below).
+  - If an aggregated meter IS expected: Print: "The property is shared with BC Hydro, but we expect an aggregated meter for this property type ([property type]). The building owner should be contacted."
+  - If an aggregated meter is NOT expected: Print: "Property data looks good."
+→ STOP.
+
+--- BRANCH B: Have meter access ---
+
+STEP B1: Check meter data source
+For each meter returned, call get_meter_consumption_data to retrieve its recent entries.
+Check the audit fields (createdBy and lastUpdatedBy) on the consumption entries for any indication that the data was populated by BC Hydro. Look for "BC Hydro", "BCHydro", or "bchydro" (case-insensitive) in these fields.
+
+If NO meters have BC Hydro as the data source:
+→ Print: "The meter data was manually entered (not from BC Hydro Web Services). The property owner should be contacted."
+→ STOP.
+
+If at least one meter has BC Hydro as the data source, continue:
+
+STEP B2: Check if aggregated meter is needed
+Using the property type from Step 1, determine if an aggregated meter is expected (see AGGREGATION RULES below).
+
+If an aggregated meter is NOT expected:
+→ Print: "Property data looks good."
+→ STOP.
+
+If an aggregated meter IS expected, continue:
+
+STEP B3: Check for aggregated meter
+Look through the meters for one that meets ANY of these criteria:
+- The meter's aggregateMeter field is true
+- The meter's data source is BC Hydro AND its name contains one of: "aggregated", "suites", "units", "residents" (case-insensitive)
+
+If such a meter EXISTS:
+→ Print: "Property data looks good."
+→ STOP.
+
+If NO aggregated meter is found:
+→ Print the property type and list ALL meters found (name, type, and source).
+→ Print: "We expected an aggregated meter for this property type ([property type]) but none was found. The property owner should be contacted."
+→ STOP.
+
+--- AGGREGATION RULES ---
+An aggregated meter is expected when the property type suggests there would be 3 or more commercial BC Hydro accounts OR 5 or more residential BC Hydro accounts. Use the property type to infer this:
+
+Property types that likely NEED an aggregated meter (multiple units/tenants):
+- Multifamily Housing
+- Residence Hall / Dormitory
+- Mixed Use Property
+- Hotel / Resort
+- Senior Care Community
+- Large Office (multi-tenant)
+- Shopping Centre / Mall
+- Supermarket / Grocery Store (large, multi-unit)
+
+Property types that likely DO NOT need an aggregated meter (single account expected):
+- Warehouse / Distribution Centre
+- K-12 School
+- Worship Facility
+- Library
+- Fire Station
+- Swimming Pool / Recreation Centre
+- Small Office (single tenant)
+- Parking
+
+Use your best judgment based on the specific property type. When uncertain, lean toward checking for an aggregated meter.`,
+        },
+      },
+    ],
+  };
 });
 
 // ─── Start ───────────────────────────────────────────────────────────────────
