@@ -290,6 +290,45 @@ async function suspiciousDataCheck(propertyId, accountName, deps) {
   };
 }
 
+// ─── Display Instructions ────────────────────────────────────────────────────
+
+const DISPLAY_INSTRUCTIONS = `
+IMPORTANT: Always present suspicious data check results in this compact format. Do NOT use tables. Do NOT add extra commentary beyond the verdict line.
+
+**Suspicious Data Check — [propertyName] (ID: [propertyId])**
+
+[propertyName], [address]
+[propertyType] | Account: [account]
+
+Then print ONE line per check that was actually performed, using the data from "steps" and "meters". Use ✅ for pass and ⚠️ for problems. Examples:
+
+Meter access: ✅ 4 meters found
+Data source: ✅ 2 electric meters from BC Hydro Web Services
+Aggregated meter: ✅ Found ("meter name here")
+
+Or:
+
+Meter access: ✅ 2 meters found
+Data source: ⚠️ All meter data was manually entered (not from BC Hydro Web Services)
+
+Or:
+
+Meter access: ⚠️ No meter access
+Shared with BC Hydro: ⚠️ Not found in connected customers
+
+Only show checks that were actually run — do not show skipped branches.
+
+End with:
+
+Verdict: ✅ Property data looks good.
+— or —
+Verdict: ⚠️ [message from the result, e.g. "The property owner should be contacted."]
+— or —
+Verdict: ❌ [error message]
+
+If outcome is "requires_aggregation_judgment", make your judgment about whether the property type needs an aggregated meter, then print the verdict as ✅ or ⚠️ accordingly. Add one brief sentence explaining your reasoning.
+`;
+
 // ─── Tool Definitions & Handler ──────────────────────────────────────────────
 
 export function getTools(ACCOUNT_NAME_PROP) {
@@ -374,8 +413,11 @@ export async function handleTool(name, args, deps) {
         args.account_name,
         deps
       );
-    case "suspicious_data_check":
-      return await suspiciousDataCheck(args.property_id, args.account_name, deps);
+    case "suspicious_data_check": {
+      const result = await suspiciousDataCheck(args.property_id, args.account_name, deps);
+      result._displayInstructions = DISPLAY_INSTRUCTIONS;
+      return result;
+    }
     case "list_connected_customers":
       return await listConnectedCustomers(args.account_name, deps);
     default:
