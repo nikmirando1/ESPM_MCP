@@ -26,7 +26,7 @@ For demonstration and educational purposes only. This is not an official ENERGY 
 ```
 Claude (your question)
   → MCP server (runs locally on your machine)
-    → ESPM API (using your credentials from .env)
+    → ESPM API (using your credentials from accounts.csv)
       → Your portfolio data only
         → Claude answers your question
 ```
@@ -69,17 +69,34 @@ npm install
 
 ### Step 3 — Add your credentials
 
-```bash
-cp env.example .env
-```
+Credentials live in a read-only CSV file.
 
-Open `.env` and fill in your ESPM username and password:
+1. Copy the example:
 
-```
-ESPM_USERNAME=your_username
-ESPM_PASSWORD=your_password
-ESPM_ENV=test   # change to "live" once you have live API access
-```
+   ```bash
+   cp accounts.csv.example accounts.csv
+   ```
+
+2. Edit `accounts.csv`. Columns are `username,password,env` (set `env` to
+   `test` or `live` per row):
+
+   ```csv
+   username,password,env
+   alice@example.com,pass1,test
+   bob@example.com,pass2,live
+   ```
+
+3. By default the server looks for `accounts.csv` in the repo root. Override
+   with the `ESPM_ACCOUNTS_CSV` env var if you'd rather keep it elsewhere
+   (e.g. in `.env`, see `env.example`).
+
+4. Every tool accepts an `account_name` parameter — pass the `username` value
+   from the CSV to pick which account to use. If the CSV contains exactly one
+   account, you can omit `account_name` and the server uses that account;
+   otherwise `account_name` is required.
+
+The CSV is only ever read; the server never writes to it. Restart the server
+after editing it.
 
 ### Step 4 — Connect to Claude Desktop
 
@@ -112,6 +129,7 @@ Restart Claude Desktop. You'll see the ESPM tools available. Start asking questi
 
 | Tool | What it does |
 |------|-------------|
+| `list_accounts` | List the ESPM accounts configured in `accounts.csv` (does not hit the API) |
 | `get_account` | Confirm you're connected and see your account info |
 | `list_properties` | List all property IDs in your account |
 | `get_property` | Get details for a specific property |
@@ -135,7 +153,7 @@ Restart Claude Desktop. You'll see the ESPM tools available. Start asking questi
 
 ## Privacy
 
-Your ESPM credentials are stored only in the `.env` file on your local machine. They are never transmitted to any server other than the official ESPM API (`portfoliomanager.energystar.gov`). This MCP has no backend, no telemetry, and no external dependencies beyond the ESPM API itself.
+Your ESPM credentials are stored only in the `accounts.csv` file on your local machine. They are never transmitted to any server other than the official ESPM API (`portfoliomanager.energystar.gov`). This MCP has no backend, no telemetry, and no external dependencies beyond the ESPM API itself.
 
 ---
 
