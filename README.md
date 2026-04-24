@@ -170,6 +170,25 @@ bind to a public interface without one.
 
 Credentials still come from `accounts.csv` the same way they do in stdio mode.
 
+### Run in Docker
+
+A `Dockerfile` is included that runs the server in HTTP mode.
+
+```bash
+docker build -t espm-mcp .
+docker run --rm -p 3000:3000 \
+  -v "$(pwd)/accounts.csv:/app/accounts.csv:ro" \
+  espm-mcp
+```
+
+The container binds to `0.0.0.0:3000` inside the container (published on the
+host via `-p`). `accounts.csv` is mounted read-only so credentials aren't baked
+into the image. Override port/host with `-e MCP_HTTP_PORT=...` /
+`-e MCP_HTTP_HOST=...` if needed.
+
+The same security caveat applies: there's no built-in auth, so don't publish
+the port to a public interface without a reverse proxy in front.
+
 ---
 
 ## Available tools
