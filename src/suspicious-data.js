@@ -90,16 +90,6 @@ async function getMeterConsumptionData(meterId, startDate, endDate, accountName,
   };
 }
 
-async function listConnectedCustomers(accountName, { espmGet, arrayify, extractLinkId }) {
-  const data = await espmGet("/customer/list", {}, accountName);
-  const customerLinks = arrayify(data?.response?.links?.link);
-
-  return customerLinks.map((link) => ({
-    id: extractLinkId(link),
-    name: link?.hint || null,
-  }));
-}
-
 // ─── Main Workflow ───────────────────────────────────────────────────────────
 
 async function suspiciousDataCheck(propertyId, accountName, deps) {
@@ -183,53 +173,37 @@ async function suspiciousDataCheck(propertyId, accountName, deps) {
   if (!hasMeterAccess) {
     steps[steps.length - 1].nextAction = "No meter access → checking if property is shared with BC Hydro";
 
-    // STEP A1: Check BC Hydro connection
-    steps.push({ check: "Check if property is shared with BC Hydro", status: "running" });
-    try {
-      const customers = await listConnectedCustomers(resolvedAccountName, deps);
-      const bcHydroCustomer = customers.find((c) => isBcHydroSource(c.name));
-      steps[steps.length - 1].status = "done";
+    // TODO: Check whether this specific property has been shared with BC Hydro.
+    // The ESPM API has no endpoint for property-level sharing. This will require
+    // scraping the ESPM web UI property summary page to read the "Sharing this
+    // Property" table. For now, we always return false.
+    steps.push({ check: "Check if property is shared with BC Hydro", status: "done" });
+    const bcHydroShared = false;
+    steps[steps.length - 1].result = "Unable to verify (property-level sharing check not yet implemented)";
 
-      if (!bcHydroCustomer) {
-        steps[steps.length - 1].result = "BC Hydro not found in connected customers";
-        return {
-          propertyId,
-          propertyName: property.name,
-          propertyType,
-          steps,
-          outcome: "suspicious",
-          message:
-            "The property has not been shared with BC Hydro. We cannot see the meters. The building owner should be contacted.",
-        };
-      }
-
-      steps[steps.length - 1].result = `BC Hydro found: "${bcHydroCustomer.name}" (ID: ${bcHydroCustomer.id})`;
-
-      // Return data for Claude to decide on aggregation
+    if (!bcHydroShared) {
       return {
         propertyId,
         propertyName: property.name,
         propertyType,
         steps,
-        outcome: "requires_aggregation_judgment",
-        message: `The property is shared with BC Hydro but we cannot access the meters. You must now determine whether this property type ("${propertyType}") would be expected to have an aggregated meter. An aggregated meter is expected when the property would have 3 or more commercial BC Hydro accounts or 5 or more residential BC Hydro accounts — use your judgment based on the property type. If an aggregated meter IS expected, the building owner should be contacted. If an aggregated meter is NOT expected, the property data looks good.`,
-      };
-    } catch (err) {
-      steps[steps.length - 1].status = "error";
-      steps[steps.length - 1].result = err.message;
-      return {
-        propertyId,
-        propertyName: property.name,
-        propertyType,
-        steps,
-        outcome: "error",
-        message: `Could not check connected customers: ${err.message}`,
+        bcHydroConnected: false,
+        outcome: "suspicious",
+        message:
+          "We cannot see the meters and cannot yet verify whether the property has been shared with BC Hydro. The building owner should be contacted.",
       };
     }
   }
 
   // ─── BRANCH B: Have meter access ───
   steps[steps.length - 1].nextAction = "Have meter access → checking data source on each meter";
+
+  // TODO: Check whether this specific property has been shared with BC Hydro.
+  // The ESPM API has no endpoint for property-level sharing. This will require
+  // scraping the ESPM web UI property summary page to read the "Sharing this
+  // Property" table. For now, we always return false.
+  const bcHydroConnected = false;
+  const bcHydroCustomerName = null;
 
   // STEP B1: Check meter data source
   steps.push({ check: "Check meter data source (BC Hydro vs manual)", status: "running" });
@@ -265,13 +239,61 @@ async function suspiciousDataCheck(propertyId, accountName, deps) {
   steps[steps.length - 1].status = "done";
   steps[steps.length - 1].result = { anyBcHydro, meters: meterDetails };
 
-  if (!anyBcHydro) {
+  // If we couldn't read consumption data on any meter, treat as "meters not shared"
+  const allUnreadable = meterDetails.length > 0 && meterDetails.every((m) => m.source === "unknown");
+  if (allUnreadable) {
+    steps[steps.length - 1].result = "Could not read consumption data on any meter — treating as meters not shared";
+
+    // Include meter names/types we could see even though consumption data was unreadable
+    const visibleMeters = metersResult.meters.map((m) => ({
+      id: m.id,
+      name: m.name,
+      type: m.type,
+      aggregateMeter: m.aggregateMeter,
+    }));
+
+    if (!bcHydroConnected) {
+      return {
+        propertyId,
+        propertyName: property.name,
+        propertyType,
+        steps,
+        meters: visibleMeters,
+        bcHydroConnected,
+        bcHydroCustomerName,
+        outcome: "suspicious",
+        message:
+          "The property has not been shared with BC Hydro. We cannot read the meter data. The building owner should be contacted.",
+      };
+    }
+
+    // Shared with BC Hydro but can't read meters — defer aggregation judgment
     return {
       propertyId,
       propertyName: property.name,
       propertyType,
       steps,
-      meters: meterDetails,
+      meters: visibleMeters,
+      bcHydroConnected,
+      bcHydroCustomerName,
+      outcome: "requires_aggregation_judgment",
+      message: `The property is shared with BC Hydro but we cannot read the meter data. You must now determine whether this property type ("${propertyType}") would be expected to have an aggregated meter. An aggregated meter is expected when the property would have 3 or more commercial BC Hydro accounts or 5 or more residential BC Hydro accounts — use your judgment based on the property type. If an aggregated meter IS expected, check the meters list for one that has aggregateMeter=true or whose name contains "aggregated", "suites", "units", or "residents". If found, the property data looks good. If not found, the building owner should be contacted. If an aggregated meter is NOT expected, the property data looks good.`,
+    };
+  }
+
+  const baseResult = {
+    propertyId,
+    propertyName: property.name,
+    propertyType,
+    steps,
+    meters: meterDetails,
+    bcHydroConnected,
+    bcHydroCustomerName,
+  };
+
+  if (!anyBcHydro) {
+    return {
+      ...baseResult,
       outcome: "suspicious",
       message:
         "The meter data was manually entered (not from BC Hydro Web Services). The property owner should be contacted.",
@@ -280,11 +302,7 @@ async function suspiciousDataCheck(propertyId, accountName, deps) {
 
   // Return data for Claude to decide on aggregation
   return {
-    propertyId,
-    propertyName: property.name,
-    propertyType,
-    steps,
-    meters: meterDetails,
+    ...baseResult,
     outcome: "requires_aggregation_judgment",
     message: `The meter data is from BC Hydro Web Services. You must now determine whether this property type ("${propertyType}") would be expected to have an aggregated meter. An aggregated meter is expected when the property would have 3 or more commercial BC Hydro accounts or 5 or more residential BC Hydro accounts — use your judgment based on the property type. If an aggregated meter is NOT expected, the property data looks good. If an aggregated meter IS expected, check the meters list above for one that has aggregateMeter=true or whose name contains "aggregated", "suites", "units", or "residents". If found, the property data looks good. If not found, show the property type and meter list and report that an aggregated meter was expected but not found — the property owner should be contacted.`,
   };
@@ -303,20 +321,22 @@ IMPORTANT: Always present suspicious data check results in this compact format. 
 Then print ONE line per check that was actually performed, using the data from "steps" and "meters". Use ✅ for pass and ⚠️ for problems. Examples:
 
 Meter access: ✅ 4 meters found
+BC Hydro connected: ✅ Yes ("BC Hydro Web Services")
 Data source: ✅ 2 electric meters from BC Hydro Web Services
 Aggregated meter: ✅ Found ("meter name here")
 
 Or:
 
 Meter access: ✅ 2 meters found
+BC Hydro connected: ⚠️ No
 Data source: ⚠️ All meter data was manually entered (not from BC Hydro Web Services)
 
 Or:
 
 Meter access: ⚠️ No meter access
-Shared with BC Hydro: ⚠️ Not found in connected customers
+BC Hydro connected: ⚠️ Not found in connected customers
 
-Only show checks that were actually run — do not show skipped branches.
+Always show the BC Hydro connection status if bcHydroConnected is present in the result. Only show other checks that were actually run — do not show skipped branches.
 
 End with:
 
@@ -327,6 +347,35 @@ Verdict: ⚠️ [message from the result, e.g. "The property owner should be con
 Verdict: ❌ [error message]
 
 If outcome is "requires_aggregation_judgment", make your judgment about whether the property type needs an aggregated meter, then print the verdict as ✅ or ⚠️ accordingly. Add one brief sentence explaining your reasoning.
+
+If the verdict is ⚠️ (the property owner should be contacted), also print a draft email below the verdict.
+
+CRITICAL: Copy the template below VERBATIM. Do NOT rephrase, reword, or paraphrase any sentence. The ONLY changes allowed are:
+- Replace {{PROPERTY_NAME}} with the actual property name
+- Replace {{PROPERTY_ID}} with the actual property ID
+- Replace {{METER_TYPES}} with the actual meter types from the data (e.g. "Natural Gas" or "District Energy")
+- Include or exclude entire paragraphs based on the conditions noted — but never change the wording of a paragraph you include.
+
+---
+
+DRAFT EMAIL:
+
+Hi x,
+
+Thank you for submitting your building {{PROPERTY_NAME}} (ID: {{PROPERTY_ID}}) to the Building Owner Portal!
+
+Upon our initial review, the data suggests that the energy usage data submitted is incomplete based on typical Site EUI ranges. Please add all meters and energy sources (examples include: {{METER_TYPES}}) for the entire building and verify the units of the energy data submitted.
+
+[Include the next paragraph ONLY if an aggregated meter is expected based on property type:]
+For Strata buildings, please ensure that you have reported the Electricity consumption data from the Common Area meter as well as the residential units. BC Hydro can help you aggregate the Electricity data for stratas with more than 5 residential accounts. You can find the instructions in our Data Aggregation article in Part 1 of our knowledge base.
+
+We'd also like to point out that it's an option to set up the automatic data exchange with BC Hydro or FortisBC by following the instructions in our knowledge base, which can replace manual data entry: https://support.crdbenchmarking.ca/portal/en/kb/articles/3-1-how-to-add-energy-data-automatically-set-up-data-exchange-with-utility-provider-s-in-espm
+
+Once this information has been added in ENERGY STAR Portfolio Manager, please click resubmit in the Building Owner Portal to complete your submission.
+
+If you have any questions, please let us know.
+
+---
 `;
 
 // ─── Tool Definitions & Handler ──────────────────────────────────────────────
@@ -389,15 +438,6 @@ export function getTools(ACCOUNT_NAME_PROP) {
         required: ["property_id"],
       },
     },
-    {
-      name: "list_connected_customers",
-      description:
-        "List all customer accounts connected to your ESPM account. Useful for checking if a specific organization (e.g. BC Hydro) has a data exchange connection.",
-      inputSchema: {
-        type: "object",
-        properties: { ...ACCOUNT_NAME_PROP },
-      },
-    },
   ];
 }
 
@@ -418,8 +458,6 @@ export async function handleTool(name, args, deps) {
       result._displayInstructions = DISPLAY_INSTRUCTIONS;
       return result;
     }
-    case "list_connected_customers":
-      return await listConnectedCustomers(args.account_name, deps);
     default:
       return null;
   }
